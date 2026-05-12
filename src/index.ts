@@ -3,6 +3,7 @@ import fastifyCors from '@fastify/cors';
 import fastifyMultipart from '@fastify/multipart';
 import { importRoutes } from './routes/import';
 import { generateRoutes } from './routes/generate';
+import { scanRoutes } from './routes/scan';
 import { healthRoutes } from './routes/health';
 
 const app = Fastify({
@@ -32,6 +33,7 @@ async function bootstrap() {
   await app.register(healthRoutes, { prefix: '/health' });
   await app.register(importRoutes, { prefix: '/import' });
   await app.register(generateRoutes, { prefix: '/generate' });
+  await app.register(scanRoutes, { prefix: '/scan' });
 
   // Start server
   const port = parseInt(process.env.PORT || '3001', 10);

@@ -17,6 +17,8 @@ interface GenerateBody {
 interface ContractPdfBody {
   docx_minio_key: string;
   field_values: Record<string, string>;
+  /** Map placeholder_key → MinIO signature image path. Ví dụ: { "chu_ky_nguoi_lam_don": "/file-upload/signatures/abc.png" } */
+  signatures?: Record<string, string>;
 }
 
 // ─── /generate/embed-signature ────────────────────────────────────────────
@@ -85,7 +87,7 @@ export async function generateRoutes(fastify: FastifyInstance) {
   );
 
   // ── POST /generate/contract-pdf ─────────────────────────────────────────
-  // Nhận docx_minio_key + field_values → fill {{key}} → HTML → PDF → trả URL
+  // Nhận docx_minio_key + field_values → fill {{key}} → LibreOffice → PDF → trả URL
   fastify.post<{ Body: ContractPdfBody }>(
     '/contract-pdf',
     async (request, reply) => {
@@ -97,32 +99,39 @@ export async function generateRoutes(fastify: FastifyInstance) {
 
       try {
         // 1. Download docx từ MinIO
+        fastify.log.info({ docx_minio_key }, 'Downloading template...');
         const templateBuffer = await downloadBuffer(docx_minio_key);
 
-        // 2. Docxtemplater: fill {{key}} → docx buffer đã điền
-        const filledDocxBuffer = generateDocxFromTemplate({ templateBuffer, fieldValues: field_values });
+        // 2. Embed signature images vào DOCX TRƯỚC (trước khi fill text xoá {{...}})
+        let docxBuffer = templateBuffer;
+        const signatures = request.body.signatures;
+        
+        // Debug log: xem Go backend gửi gì
+        fastify.log.info({
+          hasSignatures: !!signatures,
+          signatureKeys: signatures ? Object.keys(signatures) : [],
+          signatureValues: signatures ? Object.values(signatures) : [],
+          fieldKeys: Object.keys(field_values),
+        }, 'Request body analysis');
 
-        // 3. Mammoth: docx → HTML
-        const mammoth = await import('mammoth');
-        const { value: html } = await mammoth.convertToHtml({ buffer: filledDocxBuffer });
+        if (signatures && Object.keys(signatures).length > 0) {
+          fastify.log.info({ sigCount: Object.keys(signatures).length, signatures }, 'Embedding signature images...');
+          const { embedSignaturesInDocx } = await import('../services/signature-embed.service');
+          docxBuffer = await embedSignaturesInDocx(docxBuffer, signatures);
+        } else {
+          fastify.log.warn('No signatures provided in request body');
+        }
 
-        // 4. Styled HTML để giữ format gần giống Word
-        const styledHtml = `<!DOCTYPE html><html><head>
-<meta charset="utf-8"/>
-<style>
-  body { font-family: 'Times New Roman', Times, serif; font-size: 13pt;
-         line-height: 1.8; max-width: 800px; margin: 0 auto;
-         padding: 40px 60px; color: #1a1a1a; }
-  p { margin: 0 0 8px; text-align: justify; }
-  table { border-collapse: collapse; width: 100%; }
-  td, th { border: 1px solid #555; padding: 6px 10px; }
-  strong { font-weight: 700; }
-</style></head><body>${html}</body></html>`;
+        // 3. Docxtemplater: fill {{key}} → value + clean remaining {{...}}
+        fastify.log.info({ fieldCount: Object.keys(field_values).length }, 'Filling template with field values...');
+        const filledDocxBuffer = generateDocxFromTemplate({ templateBuffer: docxBuffer, fieldValues: field_values });
 
-        // 5. Puppeteer: HTML → PDF
-        const pdfBuffer = await renderHtmlToPdf(styledHtml, {});
+        // 4. LibreOffice headless: DOCX → PDF (giữ nguyên format Word)
+        fastify.log.info('Converting DOCX → PDF via LibreOffice...');
+        const { convertDocxToPdfViaLibreOffice } = await import('../services/libreoffice.service');
+        const pdfBuffer = await convertDocxToPdfViaLibreOffice(filledDocxBuffer);
 
-        // 6. Upload PDF lên MinIO
+        // 4. Upload PDF lên MinIO
         const outputId = uuidv4();
         const pdfKey = `contracts/preview/${outputId}/contract.pdf`;
         const pdfUrl = await uploadBuffer(pdfBuffer, pdfKey, 'application/pdf');
