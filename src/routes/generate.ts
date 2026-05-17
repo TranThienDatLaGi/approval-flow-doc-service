@@ -8,7 +8,7 @@ import { PDFDocument } from 'pdf-lib';
 interface GenerateBody {
   template_html: string;
   original_docx_path: string;
-  field_values: Record<string, string>;
+  field_values: Record<string, string | Record<string, string | number>[]>;
   output_formats?: ('pdf' | 'docx')[];
   output_prefix?: string;
 }
@@ -16,7 +16,7 @@ interface GenerateBody {
 // ─── /generate/contract-pdf ────────────────────────────────────────────────
 interface ContractPdfBody {
   docx_minio_key: string;
-  field_values: Record<string, string>;
+  field_values: Record<string, string | Record<string, string | number>[]>;
   /** Map placeholder_key → MinIO signature image path. Ví dụ: { "chu_ky_nguoi_lam_don": "/file-upload/signatures/abc.png" } */
   signatures?: Record<string, string>;
 }
@@ -63,7 +63,12 @@ export async function generateRoutes(fastify: FastifyInstance) {
 
       if (output_formats.includes('pdf')) {
         fastify.log.info({ outputId }, 'Generating PDF...');
-        const pdfBuffer = await renderHtmlToPdf(template_html, field_values);
+        // renderHtmlToPdf chỉ hỗ trợ flat string values (HTML path, không có loop)
+        const flatValues: Record<string, string> = {};
+        for (const [k, v] of Object.entries(field_values)) {
+          if (typeof v === 'string') flatValues[k] = v;
+        }
+        const pdfBuffer = await renderHtmlToPdf(template_html, flatValues);
         const pdfObjectName = `contracts/generated/${outputId}/${output_prefix}.pdf`;
         result.pdf_path = await uploadBuffer(pdfBuffer, pdfObjectName, 'application/pdf');
         fastify.log.info({ outputId, pdfPath: result.pdf_path }, 'PDF generated');

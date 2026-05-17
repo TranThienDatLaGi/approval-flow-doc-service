@@ -4,14 +4,20 @@ import Docxtemplater from 'docxtemplater';
 export interface GenerateDocxOptions {
   /** Buffer của file .docx gốc (template) */
   templateBuffer: Buffer;
-  /** Map field key → giá trị thật */
-  fieldValues: Record<string, string>;
+  /** Map field key → giá trị thật (string cho flat, array cho table) */
+  fieldValues: Record<string, string | Record<string, string | number>[]>;
 }
 
 /**
  * Điền data vào .docx template và trả về .docx Buffer
  *
  * Strategy: Try docxtemplater first → fallback safe XML replacement
+ *
+ * Hỗ trợ:
+ * - {{key}} → flat field replacement
+ * - {{#table}}...{{/table}} → repeating table rows (Docxtemplater loop)
+ *
+ * Delimiter: {{double curly}} thống nhất cho toàn hệ thống.
  */
 export function generateDocxFromTemplate(options: GenerateDocxOptions): Buffer {
   const { templateBuffer, fieldValues } = options;
@@ -22,6 +28,7 @@ export function generateDocxFromTemplate(options: GenerateDocxOptions): Buffer {
     const doc = new Docxtemplater(zip, {
       paragraphLoop: true,
       linebreaks: true,
+      delimiters: { start: '{{', end: '}}' },
       errorLogging: false,
       nullGetter() {
         return '';
@@ -34,7 +41,15 @@ export function generateDocxFromTemplate(options: GenerateDocxOptions): Buffer {
   }
 
   // Approach 2: Safe XML replacement (không phá vỡ cấu trúc DOCX)
-  return safeXmlReplace(templateBuffer, fieldValues);
+  // Fallback chỉ xử lý flat fields, không hỗ trợ loop
+  const flatValues: Record<string, string> = {};
+  for (const [key, value] of Object.entries(fieldValues)) {
+    if (typeof value === 'string') {
+      flatValues[key] = value;
+    }
+    // Array values (tables) bị bỏ qua trong fallback
+  }
+  return safeXmlReplace(templateBuffer, flatValues);
 }
 
 /**
@@ -62,8 +77,8 @@ function safeXmlReplace(templateBuffer: Buffer, fieldValues: Record<string, stri
     }
   }
 
-  // Step 3: Clean remaining unreplaced {{...}} placeholders
-  xml = xml.replace(/\{\{[^}]*\}\}/g, '');
+  // Step 3: Clean remaining unreplaced {{...}} placeholders (including loop markers)
+  xml = xml.replace(/\{\{[#/]?[^}]*\}\}/g, '');
 
   zip.file('word/document.xml', xml);
 
@@ -75,7 +90,7 @@ function safeXmlReplace(templateBuffer: Buffer, fieldValues: Record<string, stri
       for (const [key, value] of Object.entries(fieldValues)) {
         headerXml = headerXml.split(`{{${key}}}`).join(escapeXml(value));
       }
-      headerXml = headerXml.replace(/\{\{[^}]*\}\}/g, '');
+      headerXml = headerXml.replace(/\{\{[#/]?[^}]*\}\}/g, '');
       zip.file(filename, headerXml);
     }
   }

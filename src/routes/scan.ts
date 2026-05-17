@@ -5,7 +5,7 @@ import { uploadBuffer } from '../services/minio.service';
 
 /**
  * POST /scan
- * Upload file .docx → trả về danh sách placeholders {{key}} tìm được
+ * Upload file .docx → trả về danh sách placeholders {{key}} + repeating tables {{#key}}...{{/key}}
  * + preview_docx_url (file DOCX đã strip {{...}} → ___)
  * Content-Type: multipart/form-data (field "file")
  */
@@ -27,9 +27,9 @@ export async function scanRoutes(app: FastifyInstance) {
 
     try {
       const buffer = await data.toBuffer();
-      const placeholders = scanDocxPlaceholders(buffer);
+      const { placeholders, tables } = scanDocxPlaceholders(buffer);
 
-      // Tạo bản DOCX "sạch" (strip placeholders → ___)
+      // Tạo bản DOCX "sạch" (strip placeholders + loop markers → ___)
       let preview_docx_url = '';
       try {
         const cleanBuffer = stripPlaceholdersFromDocx(buffer);
@@ -48,7 +48,9 @@ export async function scanRoutes(app: FastifyInstance) {
       return reply.send({
         filename: data.filename,
         total_placeholders: placeholders.length,
+        total_tables: tables.length,
         placeholders,
+        tables,
         preview_docx_url,
       });
     } catch (err: any) {
